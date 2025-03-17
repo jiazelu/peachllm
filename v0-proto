@@ -1,0 +1,79 @@
+# Install required libraries
+!pip install yfinance ta sec-api openai scikit-learn
+
+# Import libraries
+import yfinance as yf
+import pandas as pd
+import ta  # Technical Analysis Library
+import requests
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+import openai
+openai.api_key = "YOUR OPENAI KEY"
+
+# Step 1: Fetch Stock Price & Technical Indicators
+def get_stock_data(ticker, period="1y"):
+    stock = yf.Ticker(ticker)
+    df = stock.history(period=period)
+    df['RSI'] = ta.momentum.RSIIndicator(df['Close']).rsi()
+    df['MACD'] = ta.trend.MACD(df['Close']).macd()
+    df['SMA_50'] = df['Close'].rolling(window=50).mean()
+    df['SMA_200'] = df['Close'].rolling(window=200).mean()
+    return df.dropna()
+
+# Step 2: Fetch Fundamental Data
+def get_fundamentals(ticker):
+    stock = yf.Ticker(ticker)
+    info = stock.info
+    return {
+        "Company": info.get("longName"),
+        "PE Ratio": info.get("trailingPE"),
+        "EPS": info.get("trailingEps"),
+        "Market Cap": info.get("marketCap"),
+        "Revenue": info.get("totalRevenue"),
+        "Net Income": info.get("netIncomeToCommon")
+    }
+
+# Step 3: Fetch SEC Filings (10-K, 10-Q) using SEC API
+def get_sec_filings(ticker):
+    API_KEY = "97a811ef7791a75445cec3ab5df5d520bf732892867c5e760309463b70a6b4d8"  # Get from sec-api.io
+    url = f"https://api.sec-api.io?token={API_KEY}&query=ticker:{ticker} AND formType:10-K"
+    response = requests.get(url).json()
+    filings = response.get("filings", [])
+    return filings[0]["link"] if filings else "No recent 10-K found."
+
+# Step 4: Train a Simple ML Model for Stock Movement Prediction
+def train_ml_model(df):
+    df['Target'] = (df['Close'].shift(-1) > df['Close']).astype(int)  # 1 if price up next day
+    features = ['RSI', 'MACD', 'SMA_50', 'SMA_200']
+    X = df[features]
+    y = df['Target']
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = RandomForestClassifier(n_estimators=100)
+    model.fit(X_train, y_train)
+    return model
+
+# Step 5: AI-Powered Stock Analysis using OpenAI GPT
+def generate_stock_analysis(ticker, model):
+    df = get_stock_data(ticker)
+    fundamentals = get_fundamentals(ticker)
+    sec_link = get_sec_filings(ticker)
+    prediction = model.predict([df.iloc[-1][['RSI', 'MACD', 'SMA_50', 'SMA_200']]])[0]
+    trend = "Bullish" if prediction == 1 else "Bearish"
+    
+    # Generate an AI-powered explanation
+    prompt = f"Analyze {ticker} stock. RSI: {df['RSI'].iloc[-1]}, MACD: {df['MACD'].iloc[-1]}, PE Ratio: {fundamentals['PE Ratio']}, Revenue: {fundamentals['Revenue']}. SEC Filings: {sec_link}. Prediction: {trend}."
+    response = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": "You are a financial assistant providing stock analysis."},
+                  {"role": "user", "content": prompt}]
+    )
+    
+    return response.choices[0].message.content
+
+# Run Analysis
+ticker = "AAPL"  # Example stock
+df = get_stock_data(ticker)
+model = train_ml_model(df)
+analysis = generate_stock_analysis(ticker, model)
+print(analysis)
